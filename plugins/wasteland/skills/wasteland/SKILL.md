@@ -79,45 +79,39 @@ be slightly stale.
 
 ## Common: Discord Notification
 
-After mutating commands (claim, post, done), send a notification to Discord
-if a webhook is configured. This is fire-and-forget — never fail the command
-if the notification fails.
+After mutating commands (claim, post, done), send a notification to the
+community Discord via the Wasteland bot. This is fire-and-forget — never
+fail the command if the notification fails.
+
+The bot URL is stored in the wasteland config or defaults to the community
+instance. Read it from config:
 
 ```bash
-DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
+BOT_URL=$(cat ~/.hop/config.json | grep -o '"bot_url": *"[^"]*"' | head -1 | cut -d'"' -f4)
+BOT_URL=${BOT_URL:-https://wasteland-bot.hop.dev}
 ```
 
-- If the file doesn't exist (`DISCORD_WEBHOOK` is empty): this is the first time — ask the user if they
-want to set up Discord notifications:
-- If **yes**: run the `setup-discord` flow (ask for webhook URL, save, test)
-- If **no**: write `DISABLED` to `~/.hop/discord-webhook.txt` so we don't
-  ask again, and continue without notification
-
-If the file exists but contains `DISABLED`, skip silently.
-If the file exists and contains a URL, POST to the webhook:
+If no bot_url in config, use the default community bot. POST to `/notify`:
 
 ```bash
-curl -s -X POST "$DISCORD_WEBHOOK" \
+curl -s -X POST "$BOT_URL/notify" \
   -H "Content-Type: application/json" \
   -d '{
-    "embeds": [{
-      "title": "TITLE_TEXT",
-      "description": "DESCRIPTION_TEXT",
-      "color": COLOR_INT,
-      "fields": [
-        {"name": "By", "value": "USER_HANDLE", "inline": true},
-        {"name": "Status", "value": "STATUS", "inline": true}
-      ],
-      "footer": {"text": "Wasteland — hop/wl-commons"}
-    }]
+    "handle": "USER_HANDLE",
+    "event": "EVENT_TYPE",
+    "title": "ITEM_TITLE",
+    "id": "ITEM_ID"
   }'
 ```
 
-Color codes:
-- Posted (new item): `3066993` (green)
-- Claimed: `16302848` (yellow)
-- Completion submitted: `3447003` (blue)
-- Validated: `10181046` (purple)
+Event types and optional fields:
+- `posted` — new wanted item. Add `"effort": "EFFORT_LEVEL"`
+- `claimed` — task claimed
+- `completed` — completion submitted. Add `"evidence": "EVIDENCE_TEXT"`
+- `validated` — stamp issued
+
+The bot verifies the handle is a registered rig before posting.
+If the POST fails, log a warning and continue — never block the user.
 
 ## MVR Schema
 
@@ -569,15 +563,12 @@ For tags, format as JSON array: `'["Go","testing"]'` or NULL if none.
 
 ### Step 5: Notify Discord
 
-See **Common: Discord Notification**. If webhook is configured:
+See **Common: Discord Notification**:
 
 ```bash
-DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
-if [ -n "$DISCORD_WEBHOOK" ] && [ "$DISCORD_WEBHOOK" != "DISABLED" ]; then
-  curl -s -X POST "$DISCORD_WEBHOOK" \
-    -H "Content-Type: application/json" \
-    -d '{"embeds":[{"title":"New Wanted: WANTED_ID","description":"TITLE","color":3066993,"fields":[{"name":"By","value":"USER_HANDLE","inline":true},{"name":"Effort","value":"EFFORT","inline":true}],"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
-fi
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"posted","title":"TITLE","id":"WANTED_ID","effort":"EFFORT"}'
 ```
 
 ### Step 6: Confirm
@@ -634,15 +625,12 @@ dolt push origin main
 
 ### Step 4: Notify Discord
 
-See **Common: Discord Notification**. If webhook is configured:
+See **Common: Discord Notification**:
 
 ```bash
-DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
-if [ -n "$DISCORD_WEBHOOK" ] && [ "$DISCORD_WEBHOOK" != "DISABLED" ]; then
-  curl -s -X POST "$DISCORD_WEBHOOK" \
-    -H "Content-Type: application/json" \
-    -d '{"embeds":[{"title":"Claimed: WANTED_ID","description":"TASK_TITLE","color":16302848,"fields":[{"name":"By","value":"USER_HANDLE","inline":true}],"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
-fi
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"claimed","title":"TASK_TITLE","id":"WANTED_ID"}'
 ```
 
 ### Step 5: Confirm
@@ -721,15 +709,12 @@ claimed and unclaimed items, and is a no-op if the item is already `in_review`
 
 ### Step 6: Notify Discord
 
-See **Common: Discord Notification**. If webhook is configured:
+See **Common: Discord Notification**:
 
 ```bash
-DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
-if [ -n "$DISCORD_WEBHOOK" ] && [ "$DISCORD_WEBHOOK" != "DISABLED" ]; then
-  curl -s -X POST "$DISCORD_WEBHOOK" \
-    -H "Content-Type: application/json" \
-    -d '{"embeds":[{"title":"Completion: WANTED_ID","description":"TASK_TITLE","color":3447003,"fields":[{"name":"By","value":"USER_HANDLE","inline":true},{"name":"Status","value":"in_review","inline":true}],"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
-fi
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"completed","title":"TASK_TITLE","id":"WANTED_ID","evidence":"EVIDENCE_TEXT"}'
 ```
 
 ### Step 7: Confirm
@@ -936,47 +921,48 @@ Wasteland Created: WASTELAND_NAME
 
 ## Command: setup-discord
 
-Configure a Discord webhook for wanted board notifications. Once set up,
-`post`, `claim`, and `done` commands will automatically notify the channel.
+Configure the Wasteland Discord bot URL. By default, notifications go to
+the community bot. Use this command to point to a custom bot instance.
 
 **Args**: none
 
-### Step 1: Ask for Webhook URL
+### Step 1: Ask for Bot URL
 
-Ask the user if they want to set up Discord notifications. If they decline,
-confirm that notifications are disabled and stop here — no file is created.
+Ask the user if they want to configure a custom bot URL, or use the
+default community bot (`https://wasteland-bot.hop.dev`).
 
-If they want to proceed, ask for their Discord webhook URL. Tell them how to create one:
+If they want a custom URL, ask for it.
 
-```
-To create a Discord webhook:
-  1. Open Discord → Server Settings → Integrations → Webhooks
-  2. Click "New Webhook"
-  3. Choose the channel for notifications
-  4. Copy the webhook URL
-```
-
-### Step 2: Save Webhook
+### Step 2: Test Connection
 
 ```bash
-mkdir -p ~/.hop
-echo "WEBHOOK_URL" > ~/.hop/discord-webhook.txt
+curl -s "$BOT_URL/health"
 ```
 
-### Step 3: Send Test Message
+If the health check returns `{"ok": true}`, the bot is reachable.
+
+### Step 3: Save to Config
+
+Read `~/.hop/config.json`, add or update the `bot_url` field:
 
 ```bash
-curl -s -X POST "WEBHOOK_URL" \
+# Use jq or manual JSON edit to add bot_url to config
+```
+
+### Step 4: Send Test Notification
+
+```bash
+curl -s -X POST "$BOT_URL/notify" \
   -H "Content-Type: application/json" \
-  -d '{"embeds":[{"title":"Wasteland Connected","description":"Discord notifications are now active for this wasteland.","color":3066993,"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
+  -d '{"handle":"USER_HANDLE","event":"posted","title":"Test notification from setup","id":"test-ping"}'
 ```
 
-If the curl succeeds (HTTP 204), confirm:
+If successful, confirm:
 
 ```
-Discord webhook configured!
-  Saved to: ~/.hop/discord-webhook.txt
-  Test message sent to your channel.
+Discord bot configured!
+  Bot URL: BOT_URL
+  Test notification sent.
 
   Notifications will fire on:
     /wasteland post   — new wanted items
@@ -984,5 +970,5 @@ Discord webhook configured!
     /wasteland done   — completion submissions
 ```
 
-If it fails, tell the user to check the URL and try again.
+If it fails, tell the user to check the URL and verify the bot is running.
 
