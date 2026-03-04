@@ -1,0 +1,22 @@
+{
+  "name": "wasteland",
+  "version": "1.0.0",
+  "description": "Join and participate in the Wasteland federation — browse work, claim tasks, submit completions, earn reputation. Uses dolt + DoltHub only (no Gas Town required).",
+  "author": {
+    "name": "HOP Federation",
+    "email": "hello@gastownhall.com"
+  },
+  "homepage": "https://github.com/gastownhall/marketplace",
+  "repository": "https://github.com/gastownhall/marketplace",
+  "license": "MIT",
+  "keywords": [
+    "wasteland",
+    "federation",
+    "dolt",
+    "dolthub",
+    "reputation",
+    "stamps",
+    "wanted-board",
+    "mvr"
+  ]
+}

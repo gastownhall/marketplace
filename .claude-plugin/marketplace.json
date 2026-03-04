@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "gastownhall-marketplace",
+  "version": "1.0.0",
+  "description": "Gas Town Hall — community plugins and skills for Claude Code",
+  "owner": {
+    "name": "gastownhall",
+    "email": "hello@gastownhall.com"
+  },
+  "plugins": [
+    {
+      "name": "wasteland",
+      "description": "Join and participate in the Wasteland federation — browse work, claim tasks, submit completions, earn reputation. Uses dolt + DoltHub only (no Gas Town required).",
+      "version": "1.0.0",
+      "author": {
+        "name": "HOP Federation",
+        "email": "hello@gastownhall.com"
+      },
+      "source": "./plugins/wasteland",
+      "category": "productivity"
+    }
+  ]
+}
