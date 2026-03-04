@@ -1,6 +1,6 @@
 # Gas Town Hall Marketplace
 
-Community plugins and skills for Claude Code.
+Part of [Gas Town Hall](https://gastownhall.ai/) — community plugins and skills for Claude Code.
 
 ## Overview
 
