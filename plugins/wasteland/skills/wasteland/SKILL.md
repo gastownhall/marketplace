@@ -43,6 +43,7 @@ DoltHub's fork-and-push model.
 | `claim <wanted-id>` | Claim a task from the board |
 | `done <wanted-id>` | Submit completion for a claimed task |
 | `create [owner/name]` | Create your own wasteland |
+| `setup-discord` | Configure Discord webhook for notifications |
 
 Parse $ARGUMENTS: the first word is the command, the rest are passed as
 that command's arguments. If no command is given, show this usage table.
@@ -75,6 +76,48 @@ dolt pull upstream main
 
 If this fails (merge conflict), continue with local data and note it may
 be slightly stale.
+
+## Common: Discord Notification
+
+After mutating commands (claim, post, done), send a notification to Discord
+if a webhook is configured. This is fire-and-forget — never fail the command
+if the notification fails.
+
+```bash
+DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
+```
+
+- If the file doesn't exist (`DISCORD_WEBHOOK` is empty): this is the first time — ask the user if they
+want to set up Discord notifications:
+- If **yes**: run the `setup-discord` flow (ask for webhook URL, save, test)
+- If **no**: write `DISABLED` to `~/.hop/discord-webhook.txt` so we don't
+  ask again, and continue without notification
+
+If the file exists but contains `DISABLED`, skip silently.
+If the file exists and contains a URL, POST to the webhook:
+
+```bash
+curl -s -X POST "$DISCORD_WEBHOOK" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "embeds": [{
+      "title": "TITLE_TEXT",
+      "description": "DESCRIPTION_TEXT",
+      "color": COLOR_INT,
+      "fields": [
+        {"name": "By", "value": "USER_HANDLE", "inline": true},
+        {"name": "Status", "value": "STATUS", "inline": true}
+      ],
+      "footer": {"text": "Wasteland — hop/wl-commons"}
+    }]
+  }'
+```
+
+Color codes:
+- Posted (new item): `3066993` (green)
+- Claimed: `16302848` (yellow)
+- Completion submitted: `3447003` (blue)
+- Validated: `10181046` (purple)
 
 ## MVR Schema
 
@@ -524,7 +567,20 @@ dolt push origin main
 
 For tags, format as JSON array: `'["Go","testing"]'` or NULL if none.
 
-### Step 5: Confirm
+### Step 5: Notify Discord
+
+See **Common: Discord Notification**. If webhook is configured:
+
+```bash
+DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
+if [ -n "$DISCORD_WEBHOOK" ] && [ "$DISCORD_WEBHOOK" != "DISABLED" ]; then
+  curl -s -X POST "$DISCORD_WEBHOOK" \
+    -H "Content-Type: application/json" \
+    -d '{"embeds":[{"title":"New Wanted: WANTED_ID","description":"TITLE","color":3066993,"fields":[{"name":"By","value":"USER_HANDLE","inline":true},{"name":"Effort","value":"EFFORT","inline":true}],"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
+fi
+```
+
+### Step 6: Confirm
 
 ```
 Posted: WANTED_ID
@@ -576,7 +632,20 @@ dolt commit -m "Claim: WANTED_ID"
 dolt push origin main
 ```
 
-### Step 4: Confirm
+### Step 4: Notify Discord
+
+See **Common: Discord Notification**. If webhook is configured:
+
+```bash
+DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
+if [ -n "$DISCORD_WEBHOOK" ] && [ "$DISCORD_WEBHOOK" != "DISABLED" ]; then
+  curl -s -X POST "$DISCORD_WEBHOOK" \
+    -H "Content-Type: application/json" \
+    -d '{"embeds":[{"title":"Claimed: WANTED_ID","description":"TASK_TITLE","color":16302848,"fields":[{"name":"By","value":"USER_HANDLE","inline":true}],"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
+fi
+```
+
+### Step 5: Confirm
 
 ```
 Claimed: WANTED_ID
@@ -650,7 +719,20 @@ Note: The status update uses `IN ('open', 'claimed')` so it works for both
 claimed and unclaimed items, and is a no-op if the item is already `in_review`
 (competing submission against an item someone else already submitted for).
 
-### Step 6: Confirm
+### Step 6: Notify Discord
+
+See **Common: Discord Notification**. If webhook is configured:
+
+```bash
+DISCORD_WEBHOOK=$(cat ~/.hop/discord-webhook.txt 2>/dev/null)
+if [ -n "$DISCORD_WEBHOOK" ] && [ "$DISCORD_WEBHOOK" != "DISABLED" ]; then
+  curl -s -X POST "$DISCORD_WEBHOOK" \
+    -H "Content-Type: application/json" \
+    -d '{"embeds":[{"title":"Completion: WANTED_ID","description":"TASK_TITLE","color":3447003,"fields":[{"name":"By","value":"USER_HANDLE","inline":true},{"name":"Status","value":"in_review","inline":true}],"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
+fi
+```
+
+### Step 7: Confirm
 
 ```
 Completion Submitted: COMPLETION_ID
@@ -851,3 +933,56 @@ Wasteland Created: WASTELAND_NAME
     /wasteland claim <id>      — claim a wanted item
     /wasteland done <id>       — submit completed work
 ```
+
+## Command: setup-discord
+
+Configure a Discord webhook for wanted board notifications. Once set up,
+`post`, `claim`, and `done` commands will automatically notify the channel.
+
+**Args**: none
+
+### Step 1: Ask for Webhook URL
+
+Ask the user if they want to set up Discord notifications. If they decline,
+confirm that notifications are disabled and stop here — no file is created.
+
+If they want to proceed, ask for their Discord webhook URL. Tell them how to create one:
+
+```
+To create a Discord webhook:
+  1. Open Discord → Server Settings → Integrations → Webhooks
+  2. Click "New Webhook"
+  3. Choose the channel for notifications
+  4. Copy the webhook URL
+```
+
+### Step 2: Save Webhook
+
+```bash
+mkdir -p ~/.hop
+echo "WEBHOOK_URL" > ~/.hop/discord-webhook.txt
+```
+
+### Step 3: Send Test Message
+
+```bash
+curl -s -X POST "WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -d '{"embeds":[{"title":"Wasteland Connected","description":"Discord notifications are now active for this wasteland.","color":3066993,"footer":{"text":"Wasteland — hop/wl-commons"}}]}'
+```
+
+If the curl succeeds (HTTP 204), confirm:
+
+```
+Discord webhook configured!
+  Saved to: ~/.hop/discord-webhook.txt
+  Test message sent to your channel.
+
+  Notifications will fire on:
+    /wasteland post   — new wanted items
+    /wasteland claim  — task claims
+    /wasteland done   — completion submissions
+```
+
+If it fails, tell the user to check the URL and try again.
+
