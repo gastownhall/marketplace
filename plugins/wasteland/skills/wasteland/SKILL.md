@@ -43,6 +43,7 @@ DoltHub's fork-and-push model.
 | `claim <wanted-id>` | Claim a task from the board |
 | `done <wanted-id>` | Submit completion for a claimed task |
 | `create [owner/name]` | Create your own wasteland |
+| `setup-discord` | Configure Discord webhook for notifications |
 
 Parse $ARGUMENTS: the first word is the command, the rest are passed as
 that command's arguments. If no command is given, show this usage table.
@@ -75,6 +76,42 @@ dolt pull upstream main
 
 If this fails (merge conflict), continue with local data and note it may
 be slightly stale.
+
+## Common: Discord Notification
+
+After mutating commands (claim, post, done), send a notification to the
+community Discord via the Wasteland bot. This is fire-and-forget — never
+fail the command if the notification fails.
+
+The bot URL is stored in the wasteland config or defaults to the community
+instance. Read it from config:
+
+```bash
+BOT_URL=$(cat ~/.hop/config.json | grep -o '"bot_url": *"[^"]*"' | head -1 | cut -d'"' -f4)
+BOT_URL=${BOT_URL:-https://wasteland-bot.hop.dev}
+```
+
+If no bot_url in config, use the default community bot. POST to `/notify`:
+
+```bash
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "handle": "USER_HANDLE",
+    "event": "EVENT_TYPE",
+    "title": "ITEM_TITLE",
+    "id": "ITEM_ID"
+  }'
+```
+
+Event types and optional fields:
+- `posted` — new wanted item. Add `"effort": "EFFORT_LEVEL"`
+- `claimed` — task claimed
+- `completed` — completion submitted. Add `"evidence": "EVIDENCE_TEXT"`
+- `validated` — stamp issued
+
+The bot verifies the handle is a registered rig before posting.
+If the POST fails, log a warning and continue — never block the user.
 
 ## MVR Schema
 
@@ -524,7 +561,17 @@ dolt push origin main
 
 For tags, format as JSON array: `'["Go","testing"]'` or NULL if none.
 
-### Step 5: Confirm
+### Step 5: Notify Discord
+
+See **Common: Discord Notification**:
+
+```bash
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"posted","title":"TITLE","id":"WANTED_ID","effort":"EFFORT"}'
+```
+
+### Step 6: Confirm
 
 ```
 Posted: WANTED_ID
@@ -576,7 +623,17 @@ dolt commit -m "Claim: WANTED_ID"
 dolt push origin main
 ```
 
-### Step 4: Confirm
+### Step 4: Notify Discord
+
+See **Common: Discord Notification**:
+
+```bash
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"claimed","title":"TASK_TITLE","id":"WANTED_ID"}'
+```
+
+### Step 5: Confirm
 
 ```
 Claimed: WANTED_ID
@@ -650,7 +707,17 @@ Note: The status update uses `IN ('open', 'claimed')` so it works for both
 claimed and unclaimed items, and is a no-op if the item is already `in_review`
 (competing submission against an item someone else already submitted for).
 
-### Step 6: Confirm
+### Step 6: Notify Discord
+
+See **Common: Discord Notification**:
+
+```bash
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"completed","title":"TASK_TITLE","id":"WANTED_ID","evidence":"EVIDENCE_TEXT"}'
+```
+
+### Step 7: Confirm
 
 ```
 Completion Submitted: COMPLETION_ID
@@ -851,3 +918,57 @@ Wasteland Created: WASTELAND_NAME
     /wasteland claim <id>      — claim a wanted item
     /wasteland done <id>       — submit completed work
 ```
+
+## Command: setup-discord
+
+Configure the Wasteland Discord bot URL. By default, notifications go to
+the community bot. Use this command to point to a custom bot instance.
+
+**Args**: none
+
+### Step 1: Ask for Bot URL
+
+Ask the user if they want to configure a custom bot URL, or use the
+default community bot (`https://wasteland-bot.hop.dev`).
+
+If they want a custom URL, ask for it.
+
+### Step 2: Test Connection
+
+```bash
+curl -s "$BOT_URL/health"
+```
+
+If the health check returns `{"ok": true}`, the bot is reachable.
+
+### Step 3: Save to Config
+
+Read `~/.hop/config.json`, add or update the `bot_url` field:
+
+```bash
+# Use jq or manual JSON edit to add bot_url to config
+```
+
+### Step 4: Send Test Notification
+
+```bash
+curl -s -X POST "$BOT_URL/notify" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"USER_HANDLE","event":"posted","title":"Test notification from setup","id":"test-ping"}'
+```
+
+If successful, confirm:
+
+```
+Discord bot configured!
+  Bot URL: BOT_URL
+  Test notification sent.
+
+  Notifications will fire on:
+    /wasteland post   — new wanted items
+    /wasteland claim  — task claims
+    /wasteland done   — completion submissions
+```
+
+If it fails, tell the user to check the URL and verify the bot is running.
+
