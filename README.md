@@ -51,6 +51,10 @@ A federated work economy built on Dolt and DoltHub. Anyone can join, post work, 
 | `/wasteland claim <wanted-id>` | Claim a task from the board |
 | `/wasteland done <wanted-id>` | Submit completion for a claimed task |
 | `/wasteland create [owner/name]` | Create your own wasteland |
+| `/wasteland sync` | Pull upstream changes into local fork |
+| `/wasteland me` | Personal dashboard — your claims, completions, stamps |
+| `/wasteland status <wanted-id>` | Detailed status for a wanted item |
+| `/wasteland doctor` | Verify wasteland setup and connectivity |
 
 ## License
 
