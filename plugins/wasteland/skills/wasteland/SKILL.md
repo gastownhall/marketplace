@@ -4,7 +4,7 @@ description: "Join and participate in the Wasteland federation — browse work, 
 allowed-tools: "Bash, Read, Write, AskUserQuestion"
 version: "1.0.0"
 author: "HOP Federation"
-argument-hint: "<command> [args] — join, browse, post, claim, done, create"
+argument-hint: "<command> [args] — join, browse, post, claim, done, create, sync, me, status, doctor"
 ---
 
 # The Wasteland
@@ -43,6 +43,10 @@ DoltHub's fork-and-push model.
 | `claim <wanted-id>` | Claim a task from the board |
 | `done <wanted-id>` | Submit completion for a claimed task |
 | `create [owner/name]` | Create your own wasteland |
+| `sync` | Pull upstream changes into local fork |
+| `me` | Personal dashboard — your claims, completions, stamps |
+| `status <wanted-id>` | Detailed status for a wanted item |
+| `doctor` | Verify wasteland setup and connectivity |
 
 Parse $ARGUMENTS: the first word is the command, the rest are passed as
 that command's arguments. If no command is given, show this usage table.
@@ -849,4 +853,287 @@ Wasteland Created: WASTELAND_NAME
     /wasteland post            — post work to your board
     /wasteland claim <id>      — claim a wanted item
     /wasteland done <id>       — submit completed work
+```
+
+## Command: sync
+
+Pull upstream changes into the local fork and show a board summary.
+
+### Step 1: Load Config
+
+See **Common: Load Config** above.
+
+### Step 2: Sync from Upstream
+
+See **Common: Sync from Upstream** above. Report the sync result
+(success or conflict) to the user explicitly — this is the primary
+purpose of the command, unlike other commands where sync is silent.
+
+### Step 3: Show Summary
+
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT status, COUNT(*) as count
+  FROM wanted
+  GROUP BY status
+  ORDER BY
+    CASE status WHEN 'open' THEN 0 WHEN 'claimed' THEN 1 WHEN 'in_review' THEN 2 ELSE 3 END
+"
+```
+
+```
+Synced from upstream.
+
+  open: N | claimed: N | in_review: N
+
+  /wasteland browse   — see the board
+```
+
+## Command: me
+
+Personal dashboard — shows your claimed tasks, completions, stamps, and
+badges in one view.
+
+### Step 1: Load Config
+
+See **Common: Load Config** above. Extract USER_HANDLE from `handle`.
+
+### Step 2: Sync from Upstream
+
+See **Common: Sync from Upstream** above.
+
+### Step 3: Query Dashboard Data
+
+Run these queries against LOCAL_DIR. Each may return zero rows — that's
+fine for new participants.
+
+**Active claims:**
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT id, title, status, effort_level, updated_at
+  FROM wanted
+  WHERE claimed_by = 'USER_HANDLE' AND status IN ('claimed', 'in_review')
+  ORDER BY updated_at DESC
+"
+```
+
+**Completions:**
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT c.id, c.wanted_id, w.title as task, c.completed_at
+  FROM completions c
+  LEFT JOIN wanted w ON c.wanted_id = w.id
+  WHERE c.completed_by = 'USER_HANDLE'
+  ORDER BY c.completed_at DESC
+"
+```
+
+**Stamps received:**
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT s.author, s.valence, s.confidence, s.severity, s.message, s.created_at
+  FROM stamps s
+  WHERE s.subject = 'USER_HANDLE'
+  ORDER BY s.created_at DESC
+"
+```
+
+**Badges:**
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT badge_type, evidence, awarded_at
+  FROM badges
+  WHERE rig_handle = 'USER_HANDLE'
+  ORDER BY awarded_at DESC
+"
+```
+
+### Step 4: Format Dashboard
+
+Present the results as a personal dashboard. Omit any section with
+zero rows — don't show empty tables.
+
+```
+Dashboard: USER_HANDLE
+
+  Active Claims (N):
+    [table]
+
+  Completions (N):
+    [table]
+
+  Stamps Received (N):
+    [table]
+
+  Badges (N):
+    [table]
+
+  /wasteland browse   — find more work
+  /wasteland done <id> — submit a completion
+```
+
+## Command: status
+
+Detailed view of a single wanted item with its completions and stamps.
+
+**Args**: `<wanted-id>` (required — the `w-*` identifier)
+
+### Step 1: Validate
+
+If no argument provided, tell user:
+```
+Usage: /wasteland status <wanted-id>
+
+Find item IDs with: /wasteland browse
+```
+
+### Step 2: Load Config
+
+See **Common: Load Config** above.
+
+### Step 3: Sync from Upstream
+
+See **Common: Sync from Upstream** above.
+
+### Step 4: Query Wanted Item
+
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT *
+  FROM wanted
+  WHERE id = 'WANTED_ID'
+"
+```
+
+If no rows returned, tell user the item was not found.
+
+### Step 5: Query Completions and Stamps
+
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT c.id, c.completed_by, c.evidence, c.validated_by,
+         c.completed_at, c.validated_at
+  FROM completions c
+  WHERE c.wanted_id = 'WANTED_ID'
+  ORDER BY c.completed_at DESC
+"
+```
+
+```bash
+cd LOCAL_DIR
+dolt sql -r tabular -q "
+  SELECT s.author, s.valence, s.confidence, s.message, s.created_at
+  FROM stamps s
+  WHERE s.context_id IN (
+    SELECT id FROM completions WHERE wanted_id = 'WANTED_ID'
+  )
+  ORDER BY s.created_at DESC
+"
+```
+
+### Step 6: Format Output
+
+Present the item details, then completions and stamps (omit sections
+with zero rows):
+
+```
+WANTED_ID: TITLE
+  Status:      STATUS
+  Posted by:   POSTED_BY
+  Claimed by:  CLAIMED_BY (or — if unclaimed)
+  Effort:      EFFORT_LEVEL
+  Tags:        TAGS
+  Created:     CREATED_AT
+
+  Completions (N):
+    [table]
+
+  Stamps (N):
+    [table]
+
+  /wasteland claim WANTED_ID   — claim this task
+  /wasteland done WANTED_ID    — submit completion
+```
+
+## Command: doctor
+
+Verify the wasteland setup is functional — checks prerequisites,
+configuration, and connectivity.
+
+### Step 1: Check Dolt
+
+```bash
+dolt version
+```
+
+If dolt is not installed, report FAIL and tell user:
+- macOS: `brew install dolt`
+- Linux: `curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash`
+
+### Step 2: Check Config
+
+```bash
+cat ~/.hop/config.json
+```
+
+If missing, report FAIL and tell user to run `/wasteland join` first.
+If present, verify it contains `handle` and at least one entry in
+`wastelands[]`.
+
+### Step 3: Check Local Clone
+
+Verify LOCAL_DIR exists and contains a `.dolt` directory:
+
+```bash
+ls -d LOCAL_DIR/.dolt
+```
+
+If missing, report FAIL — the local clone may need to be re-created
+via `/wasteland join`.
+
+### Step 4: Check Remotes
+
+```bash
+cd LOCAL_DIR
+dolt remote -v
+```
+
+Verify both `origin` (user's fork) and `upstream` (the commons source)
+are configured. Report FAIL for any missing remote.
+
+### Step 5: Check Connectivity
+
+```bash
+cd LOCAL_DIR
+dolt fetch upstream 2>&1
+```
+
+If fetch succeeds, connectivity is good. If it fails, report FAIL with
+the error message.
+
+### Step 6: Print Summary
+
+```
+Wasteland Doctor
+
+  [PASS] dolt installed (vX.Y.Z)
+  [PASS] config exists (~/.hop/config.json)
+  [PASS] local clone (LOCAL_DIR)
+  [PASS] remotes configured (origin + upstream)
+  [PASS] connectivity (upstream reachable)
+
+  All checks passed. Your wasteland setup is healthy.
+```
+
+Or for failures:
+
+```
+  [FAIL] config exists — run /wasteland join first
 ```
