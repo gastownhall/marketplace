@@ -43,6 +43,8 @@ Then install the plugin:
 | `/wasteland claim <wanted-id>` | Claim a task from the board |
 | `/wasteland done <wanted-id>` | Submit completion for a claimed task |
 | `/wasteland create [owner/name]` | Create your own wasteland |
+| `/wasteland review` | List pending DoltHub PRs (maintainers) |
+| `/wasteland merge <pr-id>` | Merge a DoltHub PR (maintainers) |
 
 ## License
 
