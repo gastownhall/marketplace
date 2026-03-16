@@ -4,7 +4,7 @@ description: "Join and participate in the Wasteland federation — browse work, 
 allowed-tools: "Bash, Read, Write, AskUserQuestion"
 version: "1.0.0"
 author: "HOP Federation"
-argument-hint: "<command> [args] — join, browse, post, claim, done, create, sync, me, status, doctor"
+argument-hint: "<command> [args] — join, browse, post, claim, done, create, sync, me, status, review, merge, doctor"
 ---
 
 # The Wasteland
@@ -46,6 +46,8 @@ DoltHub's fork-and-push model.
 | `sync` | Pull upstream changes into local fork |
 | `me` | Personal dashboard — your claims, completions, stamps |
 | `status <wanted-id>` | Detailed status for a wanted item |
+| `review` | List pending DoltHub PRs (maintainers) |
+| `merge <pr-id>` | Merge a DoltHub PR (maintainers) |
 | `doctor` | Verify wasteland setup and connectivity |
 
 Parse $ARGUMENTS: the first word is the command, the rest are passed as
@@ -80,6 +82,101 @@ dolt pull upstream main
 If this fails (merge conflict), continue with local data and note it may
 be slightly stale.
 
+## Common: Detect Contribution Mode
+
+Check whether this wasteland uses PR-based contributions or direct writes:
+
+```bash
+cd LOCAL_DIR
+dolt sql -r csv -q "SELECT value FROM _meta WHERE \`key\` = 'contribution_mode'"
+```
+
+- If the result is `pr_based` → use PR flow (see **Common: Submit Changes** below)
+- If the result is `wild_west`, empty, or the key doesn't exist → use direct push to `origin main`
+
+Store the result as CONTRIBUTION_MODE for use in subsequent steps.
+
+## Common: Submit Changes (PR or Direct)
+
+After making SQL changes and staging them, use this flow to submit:
+
+**If CONTRIBUTION_MODE is `wild_west` (or unset):**
+
+```bash
+cd LOCAL_DIR
+dolt add .
+dolt commit -m "COMMIT_MESSAGE"
+dolt push origin main
+```
+
+**If CONTRIBUTION_MODE is `pr_based`:**
+
+1. Create a contribution branch:
+
+```bash
+cd LOCAL_DIR
+BRANCH_NAME="contrib/USER_HANDLE/ACTION_SLUG"
+dolt checkout -b $BRANCH_NAME
+```
+
+Where ACTION_SLUG is a short descriptor like `claim-w-abc123`, `complete-w-abc123`,
+`post-w-abc123`, or `register-HANDLE`.
+
+2. Stage and commit:
+
+```bash
+dolt add .
+dolt commit -m "COMMIT_MESSAGE"
+```
+
+3. Push the branch to your fork:
+
+```bash
+dolt push origin $BRANCH_NAME
+```
+
+4. Create a DoltHub PR from your fork's branch to the upstream's main.
+
+Extract UPSTREAM_ORG and UPSTREAM_DB from config (`wastelands[].upstream`),
+and FORK_ORG from config (`dolthub_org`).
+
+Get the DoltHub token:
+
+```bash
+DOLTHUB_TOKEN=${DOLTHUB_TOKEN:-$(dolt creds ls 2>/dev/null | grep 'key:' | head -1 | awk '{print $2}')}
+```
+
+Create the PR:
+
+```bash
+curl -s -X POST "https://www.dolthub.com/api/v1alpha1/UPSTREAM_ORG/UPSTREAM_DB/pulls" \
+  -H "Content-Type: application/json" \
+  -H "authorization: token $DOLTHUB_TOKEN" \
+  -d '{
+    "title": "COMMIT_MESSAGE",
+    "description": "Submitted by USER_HANDLE via /wasteland",
+    "fromBranchName": "BRANCH_NAME",
+    "toBranchName": "main",
+    "fromBranchOwnerName": "FORK_ORG"
+  }'
+```
+
+Parse the response to extract the PR ID or URL. If the API returns an error,
+report it to the user but note the branch is pushed and they can create the PR
+manually on DoltHub.
+
+5. Switch back to main:
+
+```bash
+dolt checkout main
+```
+
+6. Report the PR URL to the user:
+
+```
+PR created: https://www.dolthub.com/repositories/UPSTREAM_ORG/UPSTREAM_DB/pulls/PR_ID
+```
+
 ## MVR Schema
 
 The schema below defines the protocol. A database with these tables is a
@@ -100,6 +197,7 @@ CREATE TABLE IF NOT EXISTS _meta (
 
 INSERT IGNORE INTO _meta (`key`, value) VALUES ('schema_version', '1.1');
 INSERT IGNORE INTO _meta (`key`, value) VALUES ('wasteland_name', 'HOP Wasteland');
+INSERT IGNORE INTO _meta (`key`, value) VALUES ('contribution_mode', 'wild_west');
 INSERT IGNORE INTO _meta (`key`, value) VALUES ('created_at', NOW());
 
 -- Rig registry — the phone book
@@ -309,23 +407,33 @@ dolt remote add upstream https://doltremoteapi.dolthub.com/UPSTREAM_ORG/UPSTREAM
 
 If upstream already exists, that's fine.
 
-### Step 7: Register as a Rig
+### Step 7: Detect Contribution Mode
+
+```bash
+cd ~/.hop/commons/UPSTREAM_ORG/UPSTREAM_DB
+dolt sql -r csv -q "SELECT value FROM _meta WHERE \`key\` = 'contribution_mode'"
+```
+
+Store the result as CONTRIBUTION_MODE (defaults to `wild_west` if not found).
+
+### Step 8: Register as a Rig
 
 ```bash
 cd ~/.hop/commons/UPSTREAM_ORG/UPSTREAM_DB
 dolt sql -q "INSERT INTO rigs (handle, display_name, dolthub_org, owner_email, gt_version, trust_level, registered_at, last_seen) VALUES ('HANDLE', 'DISPLAY_NAME', 'DOLTHUB_ORG', 'EMAIL', 'mvr-0.1', 1, NOW(), NOW()) ON DUPLICATE KEY UPDATE last_seen = NOW(), gt_version = 'mvr-0.1'"
-dolt add .
-dolt commit -m "Register rig: HANDLE"
 ```
 
-### Step 8: Push Registration
+### Step 9: Push Registration
 
-```bash
-cd ~/.hop/commons/UPSTREAM_ORG/UPSTREAM_DB
-dolt push origin main
-```
+Submit using **Common: Submit Changes** with:
+- COMMIT_MESSAGE: `"Register rig: HANDLE"`
+- ACTION_SLUG: `register-HANDLE`
 
-### Step 9: Save Config
+In PR mode, the registration PR must be merged by a maintainer before
+the rig is visible in the upstream. Tell the user their PR is pending
+approval.
+
+### Step 10: Save Config
 
 If `~/.hop/config.json` already exists (joining additional wasteland),
 read the existing config, append the new wasteland to the `wastelands`
@@ -364,7 +472,7 @@ When appending, add a new entry to the `wastelands` array:
 }
 ```
 
-### Step 10: Confirm
+### Step 11: Confirm
 
 Print a summary:
 
@@ -515,19 +623,24 @@ Then ask for:
 echo "w-$(openssl rand -hex 5)"
 ```
 
-### Step 4: Insert
+### Step 4: Detect Contribution Mode
+
+See **Common: Detect Contribution Mode** above.
+
+### Step 5: Insert and Submit
 
 ```bash
 cd LOCAL_DIR
 dolt sql -q "INSERT INTO wanted (id, title, description, project, type, priority, tags, posted_by, status, effort_level, sandbox_required, created_at, updated_at) VALUES ('WANTED_ID', 'TITLE', 'DESCRIPTION', PROJECT_OR_NULL, 'TYPE', 2, TAGS_JSON_OR_NULL, 'USER_HANDLE', 'open', 'EFFORT', SANDBOX_BOOL, NOW(), NOW())"
-dolt add .
-dolt commit -m "Post wanted: TITLE"
-dolt push origin main
 ```
 
 For tags, format as JSON array: `'["Go","testing"]'` or NULL if none.
 
-### Step 5: Confirm
+Now submit using **Common: Submit Changes** with:
+- COMMIT_MESSAGE: `"Post wanted: TITLE"`
+- ACTION_SLUG: `post-WANTED_ID`
+
+### Step 6: Confirm
 
 ```
 Posted: WANTED_ID
@@ -569,17 +682,22 @@ Verify:
 - Status is 'open' (if claimed, tell user who has it)
 - If already claimed by this user, note that
 
-### Step 3: Claim It
+### Step 3: Detect Contribution Mode
+
+See **Common: Detect Contribution Mode** above.
+
+### Step 4: Claim and Submit
 
 ```bash
 cd LOCAL_DIR
 dolt sql -q "UPDATE wanted SET claimed_by='USER_HANDLE', status='claimed', updated_at=NOW() WHERE id='WANTED_ID' AND status='open'"
-dolt add .
-dolt commit -m "Claim: WANTED_ID"
-dolt push origin main
 ```
 
-### Step 4: Confirm
+Now submit using **Common: Submit Changes** with:
+- COMMIT_MESSAGE: `"Claim: WANTED_ID"`
+- ACTION_SLUG: `claim-WANTED_ID`
+
+### Step 5: Confirm
 
 ```
 Claimed: WANTED_ID
@@ -638,22 +756,27 @@ The evidence goes into the `completions.evidence` field as text.
 echo "c-$(openssl rand -hex 5)"
 ```
 
-### Step 5: Submit Completion
+### Step 5: Detect Contribution Mode
+
+See **Common: Detect Contribution Mode** above.
+
+### Step 6: Submit Completion
 
 ```bash
 cd LOCAL_DIR
 dolt sql -q "INSERT INTO completions (id, wanted_id, completed_by, evidence, completed_at) VALUES ('COMPLETION_ID', 'WANTED_ID', 'USER_HANDLE', 'EVIDENCE_TEXT', NOW())"
 dolt sql -q "UPDATE wanted SET status='in_review', updated_at=NOW() WHERE id='WANTED_ID' AND status IN ('open', 'claimed')"
-dolt add .
-dolt commit -m "Complete: WANTED_ID"
-dolt push origin main
 ```
 
 Note: The status update uses `IN ('open', 'claimed')` so it works for both
 claimed and unclaimed items, and is a no-op if the item is already `in_review`
 (competing submission against an item someone else already submitted for).
 
-### Step 6: Confirm
+Now submit using **Common: Submit Changes** with:
+- COMMIT_MESSAGE: `"Complete: WANTED_ID"`
+- ACTION_SLUG: `complete-WANTED_ID`
+
+### Step 7: Confirm
 
 ```
 Completion Submitted: COMPLETION_ID
@@ -703,6 +826,7 @@ Then ask for:
 - **Description**: Optional description for DoltHub
 - **Display name**: Your display name for the rigs table
 - **Email**: Contact email
+- **Contribution mode**: `wild_west` (direct push, default) or `pr_based` (DoltHub PRs required)
 
 Also determine their DoltHub org from credentials:
 
@@ -756,7 +880,7 @@ cd $TMPDIR
 dolt sql -q "REPLACE INTO _meta (\`key\`, value) VALUES ('wasteland_name', 'WASTELAND_NAME')"
 dolt sql -q "REPLACE INTO _meta (\`key\`, value) VALUES ('created_by', 'HANDLE')"
 dolt sql -q "REPLACE INTO _meta (\`key\`, value) VALUES ('upstream', 'hop/wl-commons')"
-dolt sql -q "REPLACE INTO _meta (\`key\`, value) VALUES ('phase1_mode', 'wild_west')"
+dolt sql -q "REPLACE INTO _meta (\`key\`, value) VALUES ('contribution_mode', 'CONTRIBUTION_MODE')"
 dolt sql -q "REPLACE INTO _meta (\`key\`, value) VALUES ('genesis_validators', '[\"HANDLE\"]')"
 
 dolt add .
@@ -1060,6 +1184,115 @@ WANTED_ID: TITLE
 
   /wasteland claim WANTED_ID   — claim this task
   /wasteland done WANTED_ID    — submit completion
+```
+
+## Command: review
+
+List pending DoltHub pull requests on the upstream wasteland. This is
+primarily for maintainers (trust_level >= 3) to see what contributions
+are awaiting review.
+
+**Args**: none
+
+### Step 1: Load Config
+
+See **Common: Load Config** above. Extract UPSTREAM_ORG, UPSTREAM_DB
+from `wastelands[].upstream`.
+
+### Step 2: Get DoltHub Token
+
+```bash
+DOLTHUB_TOKEN=${DOLTHUB_TOKEN:-$(dolt creds ls 2>/dev/null | grep 'key:' | head -1 | awk '{print $2}')}
+```
+
+### Step 3: List Open PRs
+
+```bash
+curl -s "https://www.dolthub.com/api/v1alpha1/UPSTREAM_ORG/UPSTREAM_DB/pulls?state=open" \
+  -H "authorization: token $DOLTHUB_TOKEN"
+```
+
+### Step 4: Format Output
+
+Parse the JSON response and present as a table:
+
+```
+Pending PRs: UPSTREAM_ORG/UPSTREAM_DB
+
+  ID    Title                          Author         Created
+  ---   ---                            ---            ---
+  12    Claim: w-abc123                alice-dev      2026-03-15
+  11    Complete: w-def456             bob-builds     2026-03-14
+  10    Register rig: charlie          charlie-dev    2026-03-13
+
+  /wasteland merge <pr-id>   — merge a PR
+```
+
+If no open PRs, tell the user:
+
+```
+No pending PRs on UPSTREAM_ORG/UPSTREAM_DB.
+```
+
+## Command: merge
+
+Merge a pending DoltHub pull request. Only maintainers (trust_level >= 3)
+should use this command.
+
+**Args**: `<pr-id>` (required — the numeric PR ID from `/wasteland review`)
+
+### Step 1: Validate
+
+If no argument provided, tell user to run `/wasteland review` first to see
+pending PRs.
+
+Load config (see **Common: Load Config**). Extract UPSTREAM_ORG, UPSTREAM_DB.
+
+### Step 2: Get DoltHub Token
+
+```bash
+DOLTHUB_TOKEN=${DOLTHUB_TOKEN:-$(dolt creds ls 2>/dev/null | grep 'key:' | head -1 | awk '{print $2}')}
+```
+
+### Step 3: Check PR Details
+
+```bash
+curl -s "https://www.dolthub.com/api/v1alpha1/UPSTREAM_ORG/UPSTREAM_DB/pulls/PR_ID" \
+  -H "authorization: token $DOLTHUB_TOKEN"
+```
+
+Show the PR title, description, author, and branch info to the user.
+Verify the PR state is `open`.
+
+### Step 4: Merge the PR
+
+```bash
+curl -s -X POST "https://www.dolthub.com/api/v1alpha1/UPSTREAM_ORG/UPSTREAM_DB/pulls/PR_ID/merge" \
+  -H "Content-Type: application/json" \
+  -H "authorization: token $DOLTHUB_TOKEN"
+```
+
+If the merge succeeds, report success. If it fails (merge conflict, permissions),
+report the error and suggest the maintainer resolve it on DoltHub.
+
+### Step 5: Sync Local
+
+After merge, pull the changes locally:
+
+```bash
+cd LOCAL_DIR
+dolt pull upstream main
+```
+
+### Step 6: Confirm
+
+```
+Merged PR #PR_ID: PR_TITLE
+  Author:  PR_AUTHOR
+  Branch:  BRANCH_NAME → main
+  Status:  merged
+
+  The contribution is now live in the commons.
 ```
 
 ## Command: doctor
