@@ -558,9 +558,16 @@ Load config (see **Common: Load Config**). Extract handle and local_dir.
 
 ### Step 2: Check the Item
 
+Pull first, then query — order matters to avoid claiming an item that was
+just taken by someone else:
+
 ```bash
 cd LOCAL_DIR
 dolt pull upstream main 2>/dev/null || true
+```
+
+```bash
+cd LOCAL_DIR
 dolt sql -r csv -q "SELECT id, title, status, claimed_by FROM wanted WHERE id = 'WANTED_ID'"
 ```
 
@@ -579,13 +586,38 @@ dolt commit -m "Claim: WANTED_ID"
 dolt push origin main
 ```
 
-### Step 4: Confirm
+### Step 4: Open PR to Upstream
+
+Pushing to your fork records the claim locally but won't appear in the
+upstream web UI until a maintainer merges it. Open a PR now:
+
+```bash
+curl -s -X POST "https://www.dolthub.com/api/v1alpha1/USER_DOLTHUB_ORG/UPSTREAM_DB/pulls" \
+  -H "Content-Type: application/json" \
+  -H "authorization: token $DOLTHUB_TOKEN" \
+  -d '{
+    "title": "Claim: WANTED_ID",
+    "description": "Claim by USER_HANDLE",
+    "fromBranchName": "main",
+    "toBranchName": "main",
+    "toOwnerName": "UPSTREAM_ORG"
+  }'
+```
+
+Extract the PR URL from the response and show it to the user. If the API
+call fails or DOLTHUB_TOKEN is unavailable, note that the claim is in the
+fork but not yet visible upstream, and link to:
+`https://www.dolthub.com/repositories/USER_DOLTHUB_ORG/UPSTREAM_DB/pulls`
+
+### Step 5: Confirm
 
 ```
 Claimed: WANTED_ID
   Title: TASK_TITLE
-  By: USER_HANDLE
+  By:    USER_HANDLE
+  PR:    PR_URL (pending merge into upstream)
 
+  Your claim is visible in your fork and submitted upstream for merge.
   When you've completed the work:
     /wasteland done WANTED_ID
 ```
